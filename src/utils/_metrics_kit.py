@@ -1,5 +1,7 @@
+# src/utils/metrics_kit.py
+
 from __future__ import annotations
-from typing import Callable, Dict, List, cast
+from typing import List
 import numpy as np
 
 __all__ = ["MetricsKit"]
@@ -8,15 +10,6 @@ class MetricsKit:
     """
     提供统一聚合函数和区间比较函数的工具类。
     """
-
-    # ---------------- 私有常量和注册表 ----------------
-    _agg: Dict[str, Callable[[List[float]], List[float]]] = {}
-    _cmp: Dict[str, Callable[[float, float, float], bool]] = {
-        "[]": lambda x, a, b: a <= x <= b,
-        "[)": lambda x, a, b: a <= x < b,
-        "(]": lambda x, a, b: a < x <= b,
-        "()": lambda x, a, b: a < x < b,
-    }
 
     # ---------------- 聚合函数定义 ----------------
     @staticmethod
