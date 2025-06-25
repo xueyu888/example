@@ -1,45 +1,54 @@
-# -*- coding: utf-8 -*-
 from __future__ import annotations
-from typing import Callable, Dict, List, Optional
-import math
+from typing import Callable, List, Optional, Tuple
 from dataclasses import dataclass
-
-from ..utils.metrics_kit import MetricsKit
-from ._dto import UnitDTO
+from ..utils._metrics_kit import MetricsKit
+from ..utils._cmp_kit import CmpKit
 from ._window import Window
-
 
 __all__ = ["Unit"]
 
 @dataclass
 class Unit:
-    _metric: str
-    _win: Window
-    _agg_fn: Optional[Callable[[List[float]], List[float]]]
-    _cmp_fn: Callable[[float, float, float], bool]          
-    _lower: float
-    _upper: float
-
+    
     @classmethod
-    def from_cfg(cls, cfg: UnitDTO, pps: int) -> "Unit":
-        win_len: int = max(1, pps * cfg.window.sec + 1) if cfg.window.type == "time" else cfg.window.size
-        _win = Window.from_cfg(win_len)
-        _agg_fn = MetricsKit.get_aggs().get(cfg.agg) if cfg.agg != "none" else None
-        _cmp_fn = MetricsKit.get_cmps()[cfg.cmp.type]
-        return cls(cfg.metric, _win, _agg_fn, _cmp_fn, *cfg.cmp.value)
+    def create( cls, 
+                win: Window, 
+                agg: str, 
+                cmp: dict[str, Tuple[float, float]],
+                cmp_values: Tuple[float, float] = (0.0, 0.0)
+                ) -> "Unit":
+    
 
-    # ---- runtime API ---------------------------------------------------
-    def push(self, sample: Dict[str, float]) -> None:
-        self._win.push(sample[self._metric])
+        # 1) 聚合函数（none → None）
+        agg_fn: Optional[Callable[[List[float]], List[float]]] = (
+            None if agg == "none" else MetricsKit.get(agg)
+        )
 
-    def is_valid(self) -> Optional[bool]:
-        if not self._win.ready() or any(math.isnan(v) for v in self._win.values()):
-            return None
+        # 2) 区间比较函数
+        cmp_fn = CmpKit.get(cmp)
 
-        values = self._win.values()
-        aggregated = self._agg_fn(values) if self._agg_fn else values  # List[float]
+        # 3) 返回实例
+        return cls(win, agg_fn, cmp_fn, cmp_values)
 
-        return all(self._cmp_fn(v, self._lower, self._upper) for v in aggregated)
+    # ──────────────────── 公共接口 ────────────────────
+    def push_and_check(self, value: float) -> Optional[bool]:
+        """写入新值到窗口"""
+        self._win.push(value)
+
+        """窗口聚合后判定是否命中"""
+        if self._agg_fn is None:
+            return False
+        
+        vals = self._agg_fn(self._win.values())
+        
+        return bool(vals) and self._cmp_fn(vals[0], self._cmp_values[0], self._cmp_values[1])
 
     def reset(self) -> None:
+        """清空窗口历史数据"""
         self._win.reset()
+
+    # ──────────────────── 私有成员变量 ────────────────────
+    _win: Window
+    _agg_fn: Optional[Callable[[List[float]], List[float]]]
+    _cmp_fn: Callable[[float, float, float], bool]
+    _cmp_values: Tuple[float, float] 

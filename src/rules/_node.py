@@ -1,102 +1,119 @@
 # ========================= rules/_node.py ============================
-"""私有树节点实现"""
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, cast
+from typing import Dict, List
 
-from ._dto import RuleDTO, UnitDTO          # ⚠️ 依赖 pydantic 定义
-from ._unit import Unit                       # 你刚贴的 Unit 实现
-
+from ._unit import Unit
+from ._dto import RuleDTO  
 
 __all__ = ["Node"]
 
 
+# --------------------------------------------------------------------
+#                           数 据 结 构
+# --------------------------------------------------------------------
 @dataclass
 class Node:
-    """递归规则节点：封装子节点、Unit 判定与活动状态"""
+    """规则树节点：持有 Unit 判定与递归子节点"""
 
-    # ----------- 结构字段（由 dataclass 直接持有） ------------------
-    id: str
-    is_always_true: bool
+    # —— 基础字段（由 dataclass 直接持有） ——
+    node_id: str
+    is_unconditional: bool
     units: List[Unit]
     subs: List["Node"]
     is_leaf: bool
 
-    # 派生字段（init=False → 构造后由工厂方法补充）
+    # —— 派生字段（init=False，构造结束后由工厂补全） ——
     sub_ids: List[str] = field(init=False)
+    units_metrics: List[str] = field(init=False)           # 仅保存 metric 字符串
     units_info: List[Dict[str, object]] = field(init=False)
-    _eval_cache: List[Optional[bool]] = field(init=False)
-    _match_cache: List[Dict[str, Optional[bool]]] = field(init=False)
 
-    # ----------- 工厂方法 ------------------------------------------
+    # —— 运行期缓存 ——
+    _eval_cache: List[bool] = field(init=False)
+    _match_cache: List[Dict[str, bool]] = field(init=False)
+
+    # ----------------------------------------------------------------
+    #                        构  造  工  厂
+    # ----------------------------------------------------------------
     @classmethod
-    def from_cfg(cls, cfg: RuleDTO, pps: int) -> "Node":
-        """由 RuleDTO + pps 构建 Node"""
-        is_always_true = cfg.units in ("else", "root")
+    def from_cfg(cls, cfg: RuleDTO, *, pps: int) -> "Node":
+        """根据 RuleDTO + pps 递归构建 Node"""
+        is_always = cfg.units in ("else", "root")
 
-        # Unit 构建
-        if is_always_true:
-            units: List[Unit] = []
-        else:
-            unit_cfgs = cast(List[UnitDTO], cfg.units)  # 静态类型收窄
-            units = [Unit.from_cfg(u, pps=pps) for u in unit_cfgs]
+        # Units
+        units: List[Unit] = []
+        if not is_always:
+            # cfg.units 在严格模式下已是 List[UnitDTO]
+            units = [Unit.from_cfg(u, pps) for u in cfg.units]  # type: ignore[arg-type]
 
-        # 子节点递归
-        subs = [cls.from_cfg(s, pps) for s in (cfg.sub or [])]
+        # 子节点
+        subs = [cls.from_cfg(c, pps=pps) for c in (cfg.sub or [])]
 
-        # 实例化
+        # 实例
         node = cls(
-            id=cfg.id,
-            is_always_true=is_always_true,
-            units=units,
-            subs=subs,
-            is_leaf=not subs,
+            node_id = cfg.id,
+            is_unconditional = is_always,
+            units = units,
+            subs = subs,
+            is_leaf = not subs,
         )
 
-        # ------- 派生字段填充 -------
-        node.sub_ids = [s.id for s in subs]
-        node.units_info = [
-            {"metric": u._metric, "window": u._win}  # 仅示例，两字段够用
-            for u in units
-        ]
+        # —— 派生属性 ——  
+        node.sub_ids = [s.node_id for s in subs]
+        node.units_metrics = [u.get_info().metric for u in units]
+        node.units_info = [u.get_info().__dict__ for u in units]
+
         return node
 
-    # ---------------- runtime API ----------------
+    # ----------------------------------------------------------------
+    #                        运  行  时  接  口
+    # ----------------------------------------------------------------
     def push(self, sample: Dict[str, float]) -> None:
-        """向本节点及所有子节点推送一条样本"""
-        if not self.is_always_true:
-            for u in self.units:
-                u.push(sample)
+        """
+        将一条样本同时推送给本节点与所有子节点。
+        `sample` 形如 {"speed": 12.3, "angle": 2.1}
+        """
+        if not self.is_unconditional:
+            # 将样本映射到各 Unit 所需的 metric
+            for u, metric in zip(self.units, self.units_metrics):
+                value = sample.get(metric, math.nan)
+                u.push(value)
             self._refresh_cache()
 
-        for s in self.subs:
-            s.push(sample)
+        # 向子树传播
+        for sub in self.subs:
+            sub.push(sample)
 
     def _refresh_cache(self) -> None:
-        """重新计算本节点单位判定结果缓存"""
-        self._eval_cache = [u.is_valid() for u in self.units]
-        self._match_cache = [{u._metric: r} for u, r in zip(self.units, self._eval_cache)]
+        """刷新本节点判定缓存"""
+        self._eval_cache = [u.check() for u in self.units]
+        self._match_cache = [
+            {metric: res} for metric, res in zip(self.units_metrics, self._eval_cache)
+        ]
 
-    # ---------------- 状态查询 --------------------
+    # ----------------------------------------------------------------
+    #                        状  态  查  询
+    # ----------------------------------------------------------------
     @property
-    def is_active(self) -> Optional[bool]:
-        """True/False/None = 全 True / 有 False / 有 None"""
-        if self.is_always_true:
-            return True
-        if False in self._eval_cache:
-            return False
-        return None if None in self._eval_cache else True
+    def is_active(self) -> bool:
+        """
+        如果节点为 always_true → True；否则所有 Unit.check() 均为 True 方返回 True。
+        """
+        return True if self.is_unconditional else all(self._eval_cache)
 
     @property
-    def units_result(self) -> List[Dict[str, Optional[bool]]]:
-        """每个 Unit 的判定结果缓存"""
+    def units_results(self) -> List[Dict[str, bool]]:
+        """返回形如 [{'speed': True}, {'angle': False}] 的 Unit 判定结果列表"""
         return self._match_cache
 
-    # ---------------- 维护方法 --------------------
+    # ----------------------------------------------------------------
+    #                        维  护  接  口
+    # ----------------------------------------------------------------
     def reset(self) -> None:
-        """递归重置本节点及子节点"""
+        """递归重置本节点及全部子节点"""
         for u in self.units:
             u.reset()
         for s in self.subs:

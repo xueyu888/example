@@ -1,5 +1,7 @@
-from typing import Callable, Dict, cast
+from typing import Callable, Dict, cast, ClassVar
 from loguru import logger
+from dataclasses import dataclass
+
 
 __all__ = ["CmpKit"]
 
@@ -58,3 +60,19 @@ class CmpKit:
     def all(cls) -> Dict[str, Callable[[float, float, float], bool]]:
         """返回比较函数映射表的浅拷贝"""
         return cls._CMP_MAP.copy()
+
+@dataclass
+class Cmp:
+    @classmethod
+    def create(cls,
+               cmp_kit: type[CmpKit],
+               cmp_values: tuple[float, float]
+    ) -> "Cmp":
+        """
+        创建一个 Cmp 实例，包含比较函数和比较值。
+        """
+        return cls(cmp_values)
+
+    _cmp_values: tuple[float, float]
+    _cmp_kit: type[CmpKit] = CmpKit
+

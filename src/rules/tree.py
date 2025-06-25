@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, List, Any
+from typing import Dict, List, Any, cast
 
 from ._dto import RuleDTO, SampleDTO
 from .src.rules._internal._node import _Node
