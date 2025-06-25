@@ -6,7 +6,9 @@ from typing import List
 from dataclasses import dataclass
 
 
-__all__: list[str] = []  # 不暴露
+__all__: list[str] = [
+    "Window",
+]
 
 @dataclass
 class Window: 
